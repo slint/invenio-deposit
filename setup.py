@@ -32,10 +32,11 @@ readme = open('README.rst').read()
 history = open('CHANGES.rst').read()
 
 tests_require = [
+    'Flask-CeleryExt>=0.2.2',
     'check-manifest>=0.25',
     'coverage>=4.0',
-    'invenio-accounts>=1.0.0a15',
-    'invenio-access>=1.0.0a9',
+    'invenio-access>=1.0.0a11',
+    'invenio-accounts>=1.0.0b1',
     'isort>=4.2.2',
     'psycopg2>=2.6.1',
     'pydocstyle>=1.0.0',
@@ -69,10 +70,11 @@ install_requires = [
     'SQLAlchemy-Continuum>=1.2.1',
     'SQLAlchemy-Utils[encrypted]>=0.32.6',
     'dictdiffer>=0.5.0.post1',
-    'elasticsearch-dsl>=2.0.0,<5.0.0',
+    'elasticsearch>=2.0.0,<3.0.0',
+    'elasticsearch-dsl>=2.0.0,<3.0.0',
     'invenio-assets>=1.0.0b2',
-    'invenio-db[versioning]>=1.0.0b2',
-    'invenio-files-rest>=1.0.0a11',
+    'invenio-db[versioning]>=1.0.0b3',
+    'invenio-files-rest>=1.0.0a14',
     'invenio-indexer>=1.0.0a7',
     'invenio-jsonschemas>=1.0.0a3',
     'invenio-oauth2server>=1.0.0a12',
@@ -81,7 +83,7 @@ install_requires = [
     'invenio-records-ui>=1.0.0a7',
     'invenio-records>=1.0.0a17',
     'invenio-search-ui>=1.0.0a5',
-    'invenio-search>=1.0.0a7',
+    'invenio-search>=1.0.0a9',
 ]
 
 packages = find_packages()
