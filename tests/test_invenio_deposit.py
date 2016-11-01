@@ -27,8 +27,9 @@
 
 from __future__ import absolute_import, print_function
 
-import pytest
 from copy import deepcopy
+
+import pytest
 from flask import Flask, render_template_string
 from invenio_records_rest import InvenioRecordsREST
 from invenio_records_rest.utils import PIDConverter
