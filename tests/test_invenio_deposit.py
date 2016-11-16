@@ -117,7 +117,7 @@ def test_conflict_in_endpoint_prefixes():
     assert 'recid' in str(err)
 
 
-def test_template(app):
+def test_template(base_app):
     """Test view."""
-    with app.test_request_context():
+    with base_app.test_request_context():
         _check_template()

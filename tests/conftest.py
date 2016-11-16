@@ -66,6 +66,7 @@ from invenio_rest import InvenioREST
 from invenio_search import InvenioSearch, current_search, current_search_client
 from invenio_search_ui import InvenioSearchUI
 from six import BytesIO, get_method_self
+from sqlalchemy import inspect
 from sqlalchemy_utils.functions import create_database, database_exists
 from werkzeug.wsgi import DispatcherMiddleware
 
@@ -74,8 +75,14 @@ from invenio_deposit.api import Deposit
 from invenio_deposit.scopes import write_scope
 
 
+def object_as_dict(obj):
+    """Make a dict from SQLAlchemy object."""
+    return {c.key: getattr(obj, c.key)
+            for c in inspect(obj).mapper.column_attrs}
+
+
 @pytest.yield_fixture()
-def app():
+def base_app():
     """Flask application fixture."""
     instance_path = tempfile.mkdtemp()
 
@@ -107,6 +114,7 @@ def app():
         Breadcrumbs(app_)
         OAuth2Provider(app_)
         InvenioDB(app_)
+        InvenioAccounts(app_)
         InvenioAccess(app_)
         InvenioIndexer(app_)
         InvenioJSONSchemas(app_)
@@ -131,7 +139,6 @@ def app():
     app.register_blueprint(accounts_blueprint)
     app.register_blueprint(oauth2server_settings_blueprint)
     InvenioAssets(app)
-    InvenioAccounts(app)
     InvenioSearchUI(app)
     InvenioRecordsUI(app)
     InvenioDeposit(app)
@@ -139,61 +146,64 @@ def app():
         '/api': api_app.wsgi_app
     })
 
-    with app.app_context():
-        yield app
+    yield app
 
     shutil.rmtree(instance_path)
 
 
 @pytest.yield_fixture()
-def api_app(app):
-    """Retrieve the REST API application."""
-    return get_method_self(app.wsgi_app.mounts['/api'])
+def app(base_app):
+    """Yield the REST API application in its context."""
+    app_ = get_method_self(base_app.wsgi_app.mounts['/api'])
+    with app_.app_context():
+        yield app_
 
 
 @pytest.yield_fixture()
-def test_client(app):
+def test_client(base_app):
     """Test client."""
-    with app.test_client() as client_:
+    with base_app.test_client() as client_:
         yield client_
 
 
 @pytest.fixture()
-def users(app, db):
+def users(base_app, db):
     """Create users."""
-    with db.session.begin_nested():
-        datastore = app.extensions['security'].datastore
-        user1 = datastore.create_user(email='info@inveniosoftware.org',
-                                      password='tester', active=True)
-        user2 = datastore.create_user(email='test@inveniosoftware.org',
-                                      password='tester2', active=True)
-        admin = datastore.create_user(email='admin@inveniosoftware.org',
-                                      password='tester3', active=True)
-        # Assign deposit-admin-access to admin only.
-        db.session.add(ActionUsers(
-            action='deposit-admin-access', user=admin
-        ))
-    db.session.commit()
-    return [user1, user2]
+    with base_app.app_context():
+        with db.session.begin_nested():
+            datastore = base_app.extensions['security'].datastore
+            user1 = datastore.create_user(email='info@inveniosoftware.org',
+                                        password='tester', active=True)
+            user2 = datastore.create_user(email='test@inveniosoftware.org',
+                                        password='tester2', active=True)
+            admin = datastore.create_user(email='admin@inveniosoftware.org',
+                                        password='tester3', active=True)
+            # Assign deposit-admin-access to admin only.
+            db.session.add(ActionUsers(
+                action='deposit-admin-access', user=admin
+            ))
+        db.session.commit()
+        return [object_as_dict(user1), object_as_dict(user2)]
 
 
 @pytest.fixture()
-def client(app, users, db):
+def client(base_app, users, db):
     """Create client."""
-    with db.session.begin_nested():
-        # create resource_owner -> client_1
-        client_ = Client(
-            client_id='client_test_u1c1',
-            client_secret='client_test_u1c1',
-            name='client_test_u1c1',
-            description='',
-            is_confidential=False,
-            user=users[0],
-            _redirect_uris='',
-            _default_scopes='',
-        )
-        db.session.add(client_)
-    db.session.commit()
+    with base_app.app_context():
+        with db.session.begin_nested():
+            # create resource_owner -> client_1
+            client_ = Client(
+                client_id='client_test_u1c1',
+                client_secret='client_test_u1c1',
+                name='client_test_u1c1',
+                description='',
+                is_confidential=False,
+                user_id=users[0]['id'],
+                _redirect_uris='',
+                _default_scopes='',
+            )
+            db.session.add(client_)
+        db.session.commit()
     return client_
 
 
@@ -203,7 +213,7 @@ def write_token_user_1(app, client, users, db):
     with db.session.begin_nested():
         token_ = Token(
             client=client,
-            user=users[0],
+            user_id=users[0]['id'],
             access_token='dev_access_1',
             refresh_token='dev_refresh_1',
             expires=datetime.datetime.now() + datetime.timedelta(hours=10),
@@ -236,18 +246,22 @@ def write_token_user_2(app, client, users, db):
 
 
 @pytest.yield_fixture()
-def db(app):
+def db(base_app):
     """Database fixture."""
-    if not database_exists(str(db_.engine.url)):
-        create_database(str(db_.engine.url))
-    db_.create_all()
+    with base_app.app_context():
+        if not database_exists(str(db_.engine.url)):
+            create_database(str(db_.engine.url))
+        db_.create_all()
+
     yield db_
-    db_.session.remove()
-    db_.drop_all()
+
+    with base_app.app_context():
+        db_.session.remove()
+        db_.drop_all()
 
 
 @pytest.fixture()
-def fake_schemas(app, es, tmpdir):
+def fake_schemas(base_app, app, es, tmpdir):
     """Fake schema."""
     schemas = tmpdir.mkdir('schemas')
     empty_schema = '{"title": "Empty"}'
@@ -261,6 +275,8 @@ def fake_schemas(app, es, tmpdir):
         schema.write(empty_schema)
 
     app.extensions['invenio-jsonschemas'].register_schemas_dir(schemas.strpath)
+    base_app.extensions['invenio-jsonschemas'].register_schemas_dir(
+        schemas.strpath)
 
 
 @pytest.yield_fixture()
@@ -295,7 +311,8 @@ def deposit(app, es, users, location, db):
         'title': 'fuu'
     }
     with app.test_request_context():
-        login_user(users[0])
+        datastore = app.extensions['security'].datastore
+        login_user(datastore.find_user(email=users[0]['email']))
         deposit = Deposit.create(record)
         deposit.commit()
         db.session.commit()
@@ -335,7 +352,7 @@ def pdf_file2_samename(app):
 
 
 @pytest.fixture()
-def json_headers(app):
+def json_headers():
     """JSON headers."""
     return [('Content-Type', 'application/json'),
             ('Accept', 'application/json')]
