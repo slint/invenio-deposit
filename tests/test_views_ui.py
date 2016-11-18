@@ -28,6 +28,7 @@ from __future__ import absolute_import, print_function
 
 from flask import url_for
 from invenio_accounts.testutils import login_user_via_session
+from invenio_db import db
 
 
 def test_index_new(base_app, test_client, users):
@@ -46,7 +47,7 @@ def test_index_new(base_app, test_client, users):
         assert test_client.get(u).status_code == 200
 
 
-def test_edit(base_app, test_client, users, deposit, db):
+def test_edit(base_app, test_client, users, deposit):
     """Test edit view."""
     with base_app.test_request_context():
         edit_url = url_for(

@@ -47,8 +47,7 @@ from invenio_access.models import ActionUsers
 from invenio_accounts import InvenioAccounts
 from invenio_accounts.views import blueprint as accounts_blueprint
 from invenio_assets import InvenioAssets
-from invenio_db import db as db_
-from invenio_db import InvenioDB
+from invenio_db import InvenioDB, db
 from invenio_files_rest import InvenioFilesREST
 from invenio_files_rest.models import Location
 from invenio_indexer import InvenioIndexer
@@ -67,7 +66,8 @@ from invenio_search import InvenioSearch, current_search, current_search_client
 from invenio_search_ui import InvenioSearchUI
 from six import BytesIO, get_method_self
 from sqlalchemy import inspect
-from sqlalchemy_utils.functions import create_database, database_exists
+from sqlalchemy_utils.functions import create_database, database_exists, \
+    drop_database
 from werkzeug.wsgi import DispatcherMiddleware
 
 from invenio_deposit import InvenioDeposit, InvenioDepositREST
@@ -82,7 +82,7 @@ def object_as_dict(obj):
 
 
 @pytest.yield_fixture()
-def base_app():
+def base_app(request):
     """Flask application fixture."""
     instance_path = tempfile.mkdtemp()
 
@@ -119,18 +119,18 @@ def base_app():
         InvenioIndexer(app_)
         InvenioJSONSchemas(app_)
         InvenioOAuth2Server(app_)
+        InvenioFilesREST(app_)
         InvenioPIDStore(app_)
         InvenioRecords(app_)
         InvenioSearch(app_)
 
     api_app = Flask('testapiapp', instance_path=instance_path)
     init_app(api_app)
-    api_app.config.update(
-        APPLICATION_ROOT='/api',
-    )
+    # api_app.config.update(
+    #     APPLICATION_ROOT='/api',
+    # )
     InvenioREST(api_app)
     InvenioOAuth2ServerREST(api_app)
-    InvenioFilesREST(api_app)
     InvenioRecordsREST(api_app)
     InvenioDepositREST(api_app)
 
@@ -146,17 +146,33 @@ def base_app():
         '/api': api_app.wsgi_app
     })
 
+    with app.app_context():
+        if str(db.engine.url) != 'sqlite://' and \
+           not database_exists(str(db.engine.url)):
+            create_database(str(db.engine.url))
+        db.create_all()
+
     yield app
 
-    shutil.rmtree(instance_path)
+    with app.app_context():
+        if str(db.engine.url) != 'sqlite://':
+            drop_database(str(db.engine.url))
+        shutil.rmtree(instance_path)
 
 
 @pytest.yield_fixture()
 def app(base_app):
     """Yield the REST API application in its context."""
-    app_ = get_method_self(base_app.wsgi_app.mounts['/api'])
-    with app_.app_context():
-        yield app_
+    with base_app.app_context():
+        yield base_app
+
+
+@pytest.yield_fixture()
+def api(base_app):
+    """Yield the REST API application in its context."""
+    api = get_method_self(base_app.wsgi_app.mounts['/api'])
+    with api.app_context():
+        yield api
 
 
 @pytest.yield_fixture()
@@ -167,48 +183,46 @@ def test_client(base_app):
 
 
 @pytest.fixture()
-def users(base_app, db):
+def users(app):
     """Create users."""
-    with base_app.app_context():
-        with db.session.begin_nested():
-            datastore = base_app.extensions['security'].datastore
-            user1 = datastore.create_user(email='info@inveniosoftware.org',
-                                        password='tester', active=True)
-            user2 = datastore.create_user(email='test@inveniosoftware.org',
-                                        password='tester2', active=True)
-            admin = datastore.create_user(email='admin@inveniosoftware.org',
-                                        password='tester3', active=True)
-            # Assign deposit-admin-access to admin only.
-            db.session.add(ActionUsers(
-                action='deposit-admin-access', user=admin
-            ))
-        db.session.commit()
-        return [object_as_dict(user1), object_as_dict(user2)]
+    with db.session.begin_nested():
+        datastore = app.extensions['security'].datastore
+        user1 = datastore.create_user(email='info@inveniosoftware.org',
+                                      password='tester', active=True)
+        user2 = datastore.create_user(email='test@inveniosoftware.org',
+                                      password='tester2', active=True)
+        admin = datastore.create_user(email='admin@inveniosoftware.org',
+                                      password='tester3', active=True)
+        # Assign deposit-admin-access to admin only.
+        db.session.add(ActionUsers(
+            action='deposit-admin-access', user=admin
+        ))
+    db.session.commit()
+    return [object_as_dict(user1), object_as_dict(user2)]
 
 
 @pytest.fixture()
-def client(base_app, users, db):
+def client(app, users):
     """Create client."""
-    with base_app.app_context():
-        with db.session.begin_nested():
-            # create resource_owner -> client_1
-            client_ = Client(
-                client_id='client_test_u1c1',
-                client_secret='client_test_u1c1',
-                name='client_test_u1c1',
-                description='',
-                is_confidential=False,
-                user_id=users[0]['id'],
-                _redirect_uris='',
-                _default_scopes='',
-            )
-            db.session.add(client_)
-        db.session.commit()
+    with db.session.begin_nested():
+        # create resource_owner -> client_1
+        client_ = Client(
+            client_id='client_test_u1c1',
+            client_secret='client_test_u1c1',
+            name='client_test_u1c1',
+            description='',
+            is_confidential=False,
+            user_id=users[0]['id'],
+            _redirect_uris='',
+            _default_scopes='',
+        )
+        db.session.add(client_)
+    db.session.commit()
     return client_
 
 
 @pytest.fixture()
-def write_token_user_1(app, client, users, db):
+def write_token_user_1(app, client, users):
     """Create token."""
     with db.session.begin_nested():
         token_ = Token(
@@ -227,12 +241,12 @@ def write_token_user_1(app, client, users, db):
 
 
 @pytest.fixture()
-def write_token_user_2(app, client, users, db):
+def write_token_user_2(app, client, users):
     """Create token."""
     with db.session.begin_nested():
         token_ = Token(
             client=client,
-            user=users[1],
+            user_id=users[1]['id'],
             access_token='dev_access_2',
             refresh_token='dev_refresh_2',
             expires=datetime.datetime.now() + datetime.timedelta(hours=10),
@@ -245,23 +259,8 @@ def write_token_user_2(app, client, users, db):
     return token_
 
 
-@pytest.yield_fixture()
-def db(base_app):
-    """Database fixture."""
-    with base_app.app_context():
-        if not database_exists(str(db_.engine.url)):
-            create_database(str(db_.engine.url))
-        db_.create_all()
-
-    yield db_
-
-    with base_app.app_context():
-        db_.session.remove()
-        db_.drop_all()
-
-
 @pytest.fixture()
-def fake_schemas(base_app, app, es, tmpdir):
+def fake_schemas(app, api, es, tmpdir):
     """Fake schema."""
     schemas = tmpdir.mkdir('schemas')
     empty_schema = '{"title": "Empty"}'
@@ -275,8 +274,7 @@ def fake_schemas(base_app, app, es, tmpdir):
         schema.write(empty_schema)
 
     app.extensions['invenio-jsonschemas'].register_schemas_dir(schemas.strpath)
-    base_app.extensions['invenio-jsonschemas'].register_schemas_dir(
-        schemas.strpath)
+    api.extensions['invenio-jsonschemas'].register_schemas_dir(schemas.strpath)
 
 
 @pytest.yield_fixture()
@@ -293,7 +291,7 @@ def es(app):
 
 
 @pytest.fixture()
-def location(app, db):
+def location(app):
     """Create default location."""
     tmppath = tempfile.mkdtemp()
     with db.session.begin_nested():
@@ -305,7 +303,7 @@ def location(app, db):
 
 
 @pytest.fixture()
-def deposit(app, es, users, location, db):
+def deposit(app, es, users, location):
     """New deposit with files."""
     record = {
         'title': 'fuu'
@@ -321,7 +319,7 @@ def deposit(app, es, users, location, db):
 
 
 @pytest.fixture()
-def files(app, es, deposit, db):
+def files(app, deposit):
     """Add a file to the deposit."""
     content = b'### Testing textfile ###'
     stream = BytesIO(content)
